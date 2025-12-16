@@ -337,20 +337,6 @@ We evaluate video generation on **a single RTX 5090 GPU**. The E2E Time refers t
 <tr>
 <td align="center" style="border: 2px solid #000; padding: 10px;">
 <div style="font-size: 1.1em;">Original, E2E Time: 166s</div>
-<div><img src="assets/videos/original/1.3B/8.gif" width="249"/></div>
-</td>
-<td align="center" style="border: 2px solid #000; padding: 10px;">
-<div style="font-size: 1.1em;">FastVideo, E2E Time: 4.7s</div>
-<div><img src="assets/videos/fastvideo/video_1.3B/8.gif" width="249"/></div>
-</td>
-<td align="center" style="border: 2px solid #000; padding: 10px;">
-<div style="font-size: 1.1em;">TurboDiffusion, E2E Time: <b>1.8s</b></div>
-<div><img src="assets/videos/turbodiffusion/1.3B/8.gif" width="249"/></div>
-</td>
-</tr>
-<tr>
-<td align="center" style="border: 2px solid #000; padding: 10px;">
-<div style="font-size: 1.1em;">Original, E2E Time: 166s</div>
 <div><img src="assets/videos/original/1.3B/11.gif" width="249"/></div>
 </td>
 <td align="center" style="border: 2px solid #000; padding: 10px;">
@@ -408,20 +394,6 @@ We evaluate video generation on **a single RTX 5090 GPU**. The E2E Time refers t
 <td align="center" style="border: 2px solid #000; padding: 10px;">
 <div style="font-size: 1.1em;">TurboDiffusion, E2E Time: <b>22.7s</b></div>
 <div><img src="assets/videos/turbodiffusion/14B_720p/0.gif" width="249"/></div>
-</td>
-</tr>
-<tr>
-<td align="center" style="border: 2px solid #000; padding: 10px;">
-<div style="font-size: 1.1em;">Original, E2E Time: 4648s</div>
-<div><img src="assets/videos/original/14B_720p/2.gif" width="249"/></div>
-</td>
-<td align="center" style="border: 2px solid #000; padding: 10px;">
-<div style="font-size: 1.1em;">FastVideo, E2E Time: 63.5s</div>
-<div><img src="assets/videos/fastvideo/video_14B_720p/2.gif" width="249"/></div>
-</td>
-<td align="center" style="border: 2px solid #000; padding: 10px;">
-<div style="font-size: 1.1em;">TurboDiffusion, E2E Time: <b>22.7s</b></div>
-<div><img src="assets/videos/turbodiffusion/14B_720p/2.gif" width="249"/></div>
 </td>
 </tr>
 <tr>
