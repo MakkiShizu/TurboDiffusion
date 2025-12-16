@@ -67,7 +67,7 @@ git submodule update --init --recursive
 pip install -e . --no-build-isolation
 ```
 
-To enable SageSLA (Sparse-Linear Attention based on SageAttention), install [SpargeAttn](https://github.com/thu-ml/SpargeAttn) first:
+To enable **SageSLA**, a very fast [SLA (Sparse-Linear Attention)](https://github.com/thu-ml/SLA) forward pass based on [SageAttention](https://github.com/thu-ml/SageAttention), install [SpargeAttn](https://github.com/thu-ml/SpargeAttn) first:
 
 ```bash
 pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation
