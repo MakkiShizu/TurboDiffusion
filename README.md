@@ -78,6 +78,13 @@ To enable SageSLA, a fast SLA forward pass based on SageAttention, install [Spar
 pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation
 ```
 
+For rCM/SLA training, additionally run:
+
+```bash
+pip install megatron-core hydra-core wandb webdataset
+pip install --no-build-isolation transformer_engine[pytorch]
+```
+
 ## Inference
 For GPUs with more than 40GB of GPU memory, **e.g., H100, we recommend using the unquantized checkpoint (without `-quant`) and removing `--quant_linear` from the command.**
 
@@ -523,7 +530,7 @@ git clone https://huggingface.co/datasets/worstcoder/Wan_datasets assets/dataset
 ```
 
 #### Start Training
-We implement white-box SLA training by aligning the predictions of the SLA-enabled model with those of the full-attention pretrained model. Unlike black-box training, which tunes the pretrained model using diffusion loss, white-box training mitigates distribution shift and is less sensitive to the training data.
+We implement white-box SLA training by aligning the predictions of the SLA-enabled model with those of the full-attention pretrained model. Unlike black-box training in the original paper, which tunes the pretrained model using diffusion loss, white-box training mitigates distribution shift and is less sensitive to the training data.
 
 Single-node training example:
 
