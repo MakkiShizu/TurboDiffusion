@@ -7,7 +7,7 @@
 This repository provides the official implementation of **TurboDiffusion**, a video generation acceleration framework that can speed up end-to-end diffusion generation by $100 \sim 200\times$ on a single RTX 5090, while maintaining video quality.   
 TurboDiffusion primarily uses [SageAttention](https://github.com/thu-ml/SageAttention), [SLA (Sparse-Linear Attention)](https://github.com/thu-ml/SLA) for attention acceleration, and [rCM](https://github.com/NVlabs/rcm) for timestep distillation.
 
-Paper: [TurboDiffusion: Accelerating Video Diffusion Models by 100-200 Times](https://jt-zhang.github.io/files/TurboDiffusion_Technical_Report.pdf)
+Paper: [TurboDiffusion: Accelerating Video Diffusion Models by 100-200 Times](https://arxiv.org/pdf/2512.16093)
 
 **Note**: the checkpoints and paper are not finalized, and will be updated later to improve quality.
 
