@@ -41,14 +41,22 @@ def print_header(args: argparse.Namespace):
     """Print fancy server header."""
     from rcm.datasets.utils import VIDEO_RES_SIZE_INFO
     w, h = VIDEO_RES_SIZE_INFO[args.resolution][args.aspect_ratio]
-    mode_str = "[cyan]T2V[/cyan] (text-to-video)" if args.mode == "t2v" else "[magenta]I2V[/magenta] (image-to-video)"
 
     header = Text()
     header.append("TurboDiffusion TUI Server\n", style="bold blue")
-    header.append(f"Mode: {mode_str}\n")
-    header.append(f"Model: [green]{args.model}[/green] | ")
-    header.append(f"Resolution: [yellow]{args.resolution}[/yellow] ({w}x{h}) | ")
-    header.append(f"Steps: [yellow]{args.num_steps}[/yellow]")
+    header.append("Mode: ")
+    if args.mode == "t2v":
+        header.append("T2V", style="cyan")
+        header.append(" (text-to-video)\n")
+    else:
+        header.append("I2V", style="magenta")
+        header.append(" (image-to-video)\n")
+    header.append("Model: ")
+    header.append(args.model, style="green")
+    header.append(" | Resolution: ")
+    header.append(args.resolution, style="yellow")
+    header.append(f" ({w}x{h}) | Steps: ")
+    header.append(str(args.num_steps), style="yellow")
 
     console.print(Panel(header, border_style="blue"))
     console.print("[dim]Type [bold]/help[/bold] for commands. Use [bold]\\\\[/bold] for newline in prompts.[/dim]\n")
