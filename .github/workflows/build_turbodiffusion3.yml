@@ -1,0 +1,100 @@
+name: Build TurboDiffusion Windows Wheel 3
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag:
+        description: 'Git branch/tag to build'
+        required: true
+        type: string
+        default: 'main'
+      pytorch_version:
+        description: 'PyTorch version'
+        required: true
+        type: string
+        default: '2.9.0'
+      cuda_version:
+        description: 'CUDA version'
+        required: true
+        type: string
+        default: '13.0.1'
+      python_version:
+        description: 'Python version'
+        required: true
+        type: string
+        default: '3.11'
+
+jobs:
+  build-wheel:
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          submodules: 'recursive'
+          # 直接拉取到当前目录，避免多层嵌套
+          path: '.'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Patch Source Code (Fix std::swap for Windows)
+        shell: powershell
+        run: |
+          # 修复 kernel.hpp 中的 std::swap 问题
+          $kernel_file = "turbodiffusion/ops/gemm/kernel.hpp"
+          if (Test-Path $kernel_file) {
+            echo "Patching $kernel_file..."
+            $content = Get-Content $kernel_file
+            # 将 std::swap(a, b) 替换为手动的 tmp 交换逻辑
+            $content = $content -replace 'std::swap\(([^,]+),\s*([^)]+)\);', '{ auto _tmp = $1; $1 = $2; $2 = _tmp; }'
+            Set-Content $kernel_file $content
+          }
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          # 1. 基础依赖
+          python -m pip install --upgrade pip
+          pip install wheel setuptools ninja
+
+          # 2. 安装 PyTorch (针对 cu130)
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # 3. 环境变量配置
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          
+          # 限制并发数。CUTLASS 编译非常吃内存，2个任务是比较稳妥的选择
+          $Env:MAX_JOBS = "1" 
+          
+          # 设置算力支持
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # 4. 抑制 NVCC 警告并处理 std::swap 导致的 host-device 调用警告
+          # -Xcudafe --diag_suppress 对应日志中的 #20014, #550, #177
+          $Env:NVCC_FLAGS = "-Xcudafe --diag_suppress=20014,550,177 --allow-unsupported-compiler"
+
+          # 5. 执行构建
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-cu130-whl
+          path: dist/*.whl
