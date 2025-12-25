@@ -190,6 +190,9 @@ For GPUs with more than 40GB of GPU memory, **e.g., H100, please use the unquant
         --ode
     ```
 
+Interactive inference via the terminal is available at `turbodiffusion/serve/`. This allows multi-turn video generation without reloading the model.
+
+
 ## Evaluation
 
 We evaluate video generation on **a single RTX 5090 GPU**. The E2E Time refers to the end-to-end diffusion generation latency, excluding text encoding and VAE decoding.
@@ -499,7 +502,7 @@ We evaluate video generation on **a single RTX 5090 GPU**. The E2E Time refers t
 
 ## Training
 
-In this repo, we provide training code based on Wan2.1 and its synthetic data. The training builds on the rCM codebase (https://github.com/NVlabs/rcm), with infrastructure support including FSDP2, Ulysses CP, and selective activation checkpointing (SAC). For rCM training instructions, please refer to the original rCM repository; SLA training guidance is provided here.
+In this repo, we provide training code based on Wan2.1 and its synthetic data. The training builds on the rCM codebase (https://github.com/NVlabs/rcm), with infrastructure support including FSDP2, Ulysses CP, and selective activation checkpointing (SAC). For rCM training instructions, please refer to the original rCM repository; [SLA (Sparse-Linear Attention)](https://github.com/thu-ml/SLA) training guidance is provided here.
 
 #### Additional Installation
 For rCM/SLA training, additionally run:
