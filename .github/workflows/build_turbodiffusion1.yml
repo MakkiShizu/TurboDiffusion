@@ -1,0 +1,85 @@
+name: Build TurboDiffusion Windows Wheel 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag:
+        description: 'Git branch/tag to build'
+        required: true
+        type: string
+        default: 'main'
+      pytorch_version:
+        description: 'PyTorch version'
+        required: true
+        type: string
+        default: '2.9.0'
+      cuda_version:
+        description: 'CUDA version'
+        required: true
+        type: string
+        default: '13.0.0'
+      python_version:
+        description: 'Python version'
+        required: true
+        type: string
+        default: '3.11'
+
+jobs:
+  build-wheel:
+    # 使用 windows-2022 以获得更好的兼容性，windows-large 也可以（如果你的仓库有该权限）
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          path: 'TurboDiffusion'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          # 构建 CUDA 扩展通常不需要整个 Toolkit 的所有组件，但为了保险建议保持默认
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          cd TurboDiffusion
+          
+          # 1. 升级 pip 并安装构建基础依赖
+          python -m pip install --upgrade pip
+          pip install wheel setuptools
+
+          # 2. 安装指定的 PyTorch + CUDA 13.0
+          # 注意：这是根据您提供的命令进行的安装
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # 3. 设置 CUDA 相关环境变量
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          
+          # 4. 设置算力支持 (针对 CUDA 13.0, 涵盖常用的 8.x, 9.0 以及潜在的 10.x/12.x 支持)
+          # 可以根据具体显卡需求调整，8.0(A100), 8.6(30系), 8.9(40系), 9.0(H100)
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # 5. 执行构建
+          # 如果源码包含 pyproject.toml 或 setup.py，这通常是通用的构建命令
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-whl-py${{ inputs.python_version }}-torch${{ inputs.pytorch_version }}-cu130
+          path: TurboDiffusion/dist/*.whl
