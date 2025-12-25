@@ -1,0 +1,88 @@
+name: Build TurboDiffusion Windows Wheel 2
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag:
+        description: 'Git branch/tag to build'
+        required: true
+        type: string
+        default: 'main'
+      pytorch_version:
+        description: 'PyTorch version'
+        required: true
+        type: string
+        default: '2.9.0'
+      cuda_version:
+        description: 'CUDA version'
+        required: true
+        type: string
+        default: '13.0.1'
+      python_version:
+        description: 'Python version'
+        required: true
+        type: string
+        default: '3.11'
+
+jobs:
+  build-wheel:
+    # 编译 CUDA 算子建议使用性能较好的 runner
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion with Submodules
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          # 关键点：必须递归克隆子模块以获取 cutlass 等依赖
+          submodules: 'recursive'
+          path: 'TurboDiffusion'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          cd TurboDiffusion
+          
+          # 1. 基础环境准备
+          python -m pip install --upgrade pip
+          # 安装 ninja 可以显著提升编译速度并减少某些环境下的路径报错
+          pip install wheel setuptools ninja
+
+          # 2. 安装指定的 PyTorch + CUDA 13.0
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # 3. 设置环境变量
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          
+          # 限制并行任务数，防止 GitHub Runner 内存溢出导致 build stopped
+          $Env:MAX_JOBS = "1" 
+          
+          # 设置算力支持 (针对 CUDA 13.0)
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # 4. 执行构建
+          # 使用 --verbose 模式以便在报错时看到更详细的输出
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-py${{ inputs.python_version }}-torch${{ inputs.pytorch_version }}-cu130
+          path: TurboDiffusion/dist/*.whl
