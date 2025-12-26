@@ -1,0 +1,151 @@
+name: Build TurboDiffusion Windows Wheel 12
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag: { description: 'Git branch/tag', required: true, default: 'main' }
+      pytorch_version: { description: 'PyTorch version', required: true, default: '2.9.0' }
+      cuda_version: { description: 'CUDA version', required: true, default: '13.0.0' }
+      python_version: { description: 'Python version', required: true, default: '3.11' }
+
+jobs:
+  build-wheel:
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          submodules: 'recursive'
+          path: '.'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # --- 步骤 1: 清理环境 (使用 PowerShell) ---
+      - name: Clean Environment
+        shell: powershell
+        run: |
+          Write-Host "Cleaning build artifacts..."
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+          if (Test-Path "TurboDiffusion.egg-info") { Remove-Item -Recurse -Force "TurboDiffusion.egg-info" }
+
+      # --- 步骤 2: 深度修复源码 (使用 Python, 避免 Shell 语法地狱) ---
+      - name: Patch Source Code
+        shell: python
+        run: |
+          import os
+          import re
+          
+          print("Starting Deep Source Code Patch...")
+
+          # === 策略 1: 修复 setup.py (无害化替换) ===
+          # 我们不删除参数（防止破坏列表语法），而是修改参数内容使其失效
+          # 例如：'-Dstd=::std' -> '-Dstd_FIXED=::std'，这样编译器就不会定义 'std' 宏了
+          setup_file = 'setup.py'
+          if os.path.exists(setup_file):
+              print(f'Patching {setup_file}...')
+              with open(setup_file, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              
+              # 1. 移除 -fPIC
+              content = content.replace("'-fPIC'", "' '").replace('"-fPIC"', '" "')
+              
+              # 2. 核心修复：把 std=::std 替换为无效宏
+              # 这样保留了 Python 列表结构，但消除了宏定义的副作用
+              if "std=::std" in content:
+                  print("Found poison flag in setup.py, neutralizing...")
+                  content = content.replace("std=::std", "std_FIXED=::std")
+                  
+              with open(setup_file, 'w', encoding='utf-8') as f:
+                  f.write(content)
+              print('setup.py patched.')
+          
+          # === 策略 2: 全局扫描头文件中的 #define std ===
+          # 防止某个隐藏的 compat.h 文件里写了 #define std ::std
+          print("Scanning all source files for harmful macros...")
+          for root, dirs, files in os.walk("."):
+              for file in files:
+                  if file.endswith(('.h', '.hpp', '.c', '.cpp', '.cu')):
+                      filepath = os.path.join(root, file)
+                      try:
+                          with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                              txt = f.read()
+                          
+                          # 扫描 #define std ::std (允许中间有空格)
+                          # 如果找到了，直接注释掉
+                          if re.search(r'^\s*#\s*define\s+std\s+::std', txt, re.MULTILINE):
+                              print(f"!! Found harmful macro in {filepath}. Patching...")
+                              txt = re.sub(r'(^\s*#\s*define\s+std\s+::std)', r'// \1', txt, flags=re.MULTILINE)
+                              with open(filepath, 'w', encoding='utf-8') as f:
+                                  f.write(txt)
+                      except Exception as e:
+                          print(f"Skipping {filepath}: {e}")
+
+          # === 策略 3: 修复 kernel.hpp 中的 std::swap (解决 GPU 调用 CPU 函数问题) ===
+          # 这是为了防止修好 C2872 后出现 compilation error
+          kernel_file = os.path.join('turbodiffusion', 'ops', 'gemm', 'kernel.hpp')
+          if os.path.exists(kernel_file):
+              print(f'Patching {kernel_file}...')
+              with open(kernel_file, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              
+              # 将 std::swap(x, y); 替换为 { auto _tmp = x; x = y; y = _tmp; }
+              pattern = r"std::swap\(([^,]+),\s*([^)]+)\);"
+              replacement = r"{ auto _tmp = \1; \1 = \2; \2 = _tmp; }"
+              
+              if 'std::swap' in content:
+                  content = re.sub(pattern, replacement, content)
+                  with open(kernel_file, 'w', encoding='utf-8') as f:
+                      f.write(content)
+                  print('kernel.hpp patched: std::swap removed.')
+          else:
+              print('Warning: kernel.hpp not found!')
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          # 基础环境
+          python -m pip install --upgrade pip
+          pip install wheel setuptools ninja
+          
+          # 安装 PyTorch
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # --- 编译器标志设置 ---
+          # /Ustd : 强制 undefine std (最后一道防线)
+          # /DNOMINMAX : 防止 min/max 宏冲突
+          $Env:CFLAGS = "/Ustd /D_HAS_STD_BYTE=0 /DNOMINMAX"
+          $Env:CXXFLAGS = "/Ustd /D_HAS_STD_BYTE=0 /DNOMINMAX"
+          $Env:NVCC_FLAGS = "-Xcompiler /Ustd -Xcompiler /D_HAS_STD_BYTE=0 -Xcompiler /DNOMINMAX -Xcudafe --diag_suppress=20014,550,177 --allow-unsupported-compiler"
+
+          # 限制并发
+          $Env:MAX_JOBS = "1"
+          
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # 执行构建
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-v2.9.0-cu130-win
+          path: dist/*.whl
