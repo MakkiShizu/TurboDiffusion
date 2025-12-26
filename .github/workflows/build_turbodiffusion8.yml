@@ -1,0 +1,107 @@
+name: Build TurboDiffusion Windows Wheel 8
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag: { description: 'Git branch/tag', required: true, default: 'main' }
+      pytorch_version: { description: 'PyTorch version', required: true, default: '2.9.0' }
+      cuda_version: { description: 'CUDA version', required: true, default: '13.0.0' }
+      python_version: { description: 'Python version', required: true, default: '3.11' }
+
+jobs:
+  build-wheel:
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          submodules: 'recursive'
+          path: '.'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Patch Source Code & Clean Environment
+        shell: powershell
+        run: |
+          # --- 1. 强力清理旧文件 ---
+          Write-Host "Cleaning build artifacts..."
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+          if (Test-Path "TurboDiffusion.egg-info") { Remove-Item -Recurse -Force "TurboDiffusion.egg-info" }
+
+          # --- 2. 修复 setup.py (核心步骤) ---
+          # TurboDiffusion 可能在 setup.py 里硬编码了 /Dstd=::std，必须删掉它
+          if (Test-Path "setup.py") {
+             Write-Host "Sanitizing setup.py..."
+             $txt = Get-Content "setup.py" -Raw
+             
+             # 1. 移除 -fPIC (Linux 专属)
+             $txt = $txt.Replace("'-fPIC'", " ").Replace('"-fPIC"', " ")
+             
+             # 2. 移除 /Dstd=::std (本次报错的根源)
+             # 同时移除带转义符的版本，防止遗漏
+             $txt = $txt.Replace("'/Dstd=::std'", " ").Replace('"/Dstd=::std"', " ")
+             $txt = $txt.Replace("/Dstd=::std", " ")
+             
+             $txt | Set-Content "setup.py" -NoNewline
+             Write-Host "setup.py patched."
+          }
+
+          # --- 3. 源码级扫描 (防止头文件里有 #define std ::std) ---
+          # 扫描所有 .h, .hpp, .cu 文件，如果发现这种定义直接注释掉
+          Get-ChildItem -Path "." -Recurse -Include *.h,*.hpp,*.c,*.cpp,*.cu | Select-String -Pattern "#define\s+std\s+::std" -List | ForEach-Object {
+              Write-Host "Found harmful macro in $($_.Path), patching..."
+              (Get-Content $_.Path) -replace '#define\s+std\s+::std', '// FIXED: removed bad std macro' | Set-Content $_.Path
+          }
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          # 基础环境
+          python -m pip install --upgrade pip
+          pip install wheel setuptools ninja
+          
+          # 安装 PyTorch
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # --- 编译器标志设置 ---
+          
+          # /Ustd : 强制取消定义 std 宏 (这是给编译器的最后一道防线)
+          # /D_HAS_STD_BYTE=0 : 解决 C++17 std::byte 冲突
+          $Env:CFLAGS = "/Ustd /D_HAS_STD_BYTE=0 /DNOMINMAX"
+          $Env:CXXFLAGS = "/Ustd /D_HAS_STD_BYTE=0 /DNOMINMAX"
+          
+          # NVCC 标志
+          $Env:NVCC_FLAGS = "-Xcompiler /Ustd -Xcompiler /D_HAS_STD_BYTE=0 -Xcompiler /DNOMINMAX -Xcudafe --diag_suppress=20014,550,177 --allow-unsupported-compiler"
+
+          # 限制并发防止崩溃
+          $Env:MAX_JOBS = "1"
+          
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # 执行构建
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-v2.9.0-cu130-win
+          path: dist/*.whl
