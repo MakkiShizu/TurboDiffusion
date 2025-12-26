@@ -1,0 +1,109 @@
+name: Build TurboDiffusion Windows Wheel 6-2
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag: { description: 'Git branch/tag', required: true, default: 'main' }
+      pytorch_version: { description: 'PyTorch version', required: true, default: '2.9.0' }
+      cuda_version: { description: 'CUDA version', required: true, default: '13.0.0' }
+      python_version: { description: 'Python version', required: true, default: '3.11' }
+
+jobs:
+  build-wheel:
+    # 强烈建议使用 windows-2022，它的工具链对 PyTorch 扩展更稳定
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          submodules: 'recursive'
+          path: '.'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Patch Source Code
+        shell: powershell
+        run: |
+          # 1. 修复 std::swap 问题 (保持不变)
+          $kernel_file = "turbodiffusion/ops/gemm/kernel.hpp"
+          if (Test-Path $kernel_file) {
+            (Get-Content $kernel_file) -replace 'std::swap\(([^,]+),\s*([^)]+)\);', '{ auto _tmp = $1; $1 = $2; $2 = _tmp; }' | Set-Content $kernel_file
+          }
+
+          # 2. 移除 setup.py 中的 -fPIC
+          # 修正说明：不再使用复杂的正则字符类，而是串联两次简单替换，绝对安全
+          if (Test-Path "setup.py") {
+            (Get-Content "setup.py") -replace "'-fPIC'", "" -replace '"-fPIC"', "" | Set-Content "setup.py"
+          }
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          # 0. 清理旧构建 (防止 Ninja 缓存导致配置不生效)
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+
+          # 基础环境
+          python -m pip install --upgrade pip
+          pip install wheel setuptools ninja
+          
+          # 安装 PyTorch
+          # 注意：检查这里的版本号是否正确，PyTorch 2.9.0 和 CUDA 13.0 目前尚未发布，
+          # 如果你是用的官方源，请确保版本号存在。如果是内部测试版则忽略此提示。
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # --- 核心修复：解决 MSVC 编译问题 ---
+          
+          # 1. 设置编译器标志
+          # 关键修改：移除了 /Dstd=::std，保留 /D_HAS_STD_BYTE=0
+          # /D_HAS_STD_BYTE=0 : 解决 "ambiguous symbol 'byte'" (std::byte vs torch::byte)
+          # /DNOMINMAX        : 解决 Windows.h 中的 min/max 宏干扰
+          $Env:CFLAGS = "/D_HAS_STD_BYTE=0 /DNOMINMAX"
+          $Env:CXXFLAGS = "/D_HAS_STD_BYTE=0 /DNOMINMAX"
+          
+          # 2. 对 NVCC 的标志 (移除 -Xcompiler /Dstd=::std)
+          $Env:NVCC_FLAGS = "-Xcompiler /D_HAS_STD_BYTE=0 -Xcompiler /DNOMINMAX -Xcudafe --diag_suppress=20014,550,177 --allow-unsupported-compiler"
+
+          # 3. 解决内存溢出/进程崩溃 (Status 4294967295):
+          # 保持单线程编译以稳定通过
+          $Env:MAX_JOBS = "1" 
+          
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # 4. 尝试彻底移除 setup.py 里的 -fPIC (之前的正则可能没匹配到)
+          # 这一步是可选的，即使有警告 D9002 通常也不会导致编译失败，但为了日志干净建议加上
+          if (Test-Path "setup.py") {
+             $content = Get-Content "setup.py"
+             # 这种正则更通用，匹配列表中的 '-fPIC' 或 "-fPIC"
+             $content = $content -replace "['-`"]-fPIC['-`"]", "" 
+             # 也可以简单粗暴地替换字符串
+             $content = $content.Replace("'-fPIC'", "")
+             $content | Set-Content "setup.py"
+          }
+
+          # 执行构建
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-v2.9.0-cu130-win
+          path: dist/*.whl
