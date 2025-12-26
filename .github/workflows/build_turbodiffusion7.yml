@@ -1,0 +1,108 @@
+name: Build TurboDiffusion Windows Wheel 7
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_tag: { description: 'Git branch/tag', required: true, default: 'main' }
+      pytorch_version: { description: 'PyTorch version', required: true, default: '2.9.0' }
+      cuda_version: { description: 'CUDA version', required: true, default: '13.0.0' }
+      python_version: { description: 'Python version', required: true, default: '3.11' }
+
+jobs:
+  build-wheel:
+    # 强烈建议使用 windows-2022，它的工具链对 PyTorch 扩展更稳定
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout TurboDiffusion
+        uses: actions/checkout@v4
+        with:
+          repository: 'thu-ml/TurboDiffusion'
+          ref: ${{ inputs.git_tag }}
+          submodules: 'recursive'
+          path: '.'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: 'network'
+          use-github-cache: true 
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Patch Source Code
+        shell: powershell
+        run: |
+          # 1. 修复 std::swap 问题 (之前已讨论)
+          $kernel_file = "turbodiffusion/ops/gemm/kernel.hpp"
+          if (Test-Path $kernel_file) {
+            (Get-Content $kernel_file) -replace 'std::swap\(([^,]+),\s*([^)]+)\);', '{ auto _tmp = $1; $1 = $2; $2 = _tmp; }' | Set-Content $kernel_file
+          }
+
+          # 2. 移除 setup.py 中可能存在的 Linux 专属参数 -fPIC (防止 MSVC 报错)
+          if (Test-Path "setup.py") {
+            (Get-Content "setup.py") -replace "'-fPIC'", " " | Set-Content setup.py
+          }
+
+      - name: Build Wheel
+        shell: powershell
+        run: |
+          # --- 1. 深度清理环境 ---
+          Write-Host "Cleaning build artifacts..."
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+          if (Test-Path "TurboDiffusion.egg-info") { Remove-Item -Recurse -Force "TurboDiffusion.egg-info" }
+
+          # --- 2. 源码级修复：扫描并移除源码中可能存在的 #define std ::std ---
+          # 这种定义在 Windows 上与 PyTorch 2.x 极度冲突，必须移除
+          Get-ChildItem -Path "." -Recurse -Include *.h,*.hpp,*.c,*.cpp,*.cu | Select-String -Pattern "#define\s+std\s+::std" -List | ForEach-Object {
+              Write-Host "Found harmful macro in $($_.Path), patching..."
+              (Get-Content $_.Path) -replace '#define\s+std\s+::std', '// FIXED: removed bad std macro' | Set-Content $_.Path
+          }
+
+          # --- 3. 基础依赖 ---
+          python -m pip install --upgrade pip
+          pip install wheel setuptools ninja
+          pip install torch==${{ inputs.pytorch_version }} torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+          # --- 4. 编译器标志 (关键修复) ---
+          # /Ustd             : 强制取消定义 std 宏 (防止任何残留或隐式定义)
+          # /D_HAS_STD_BYTE=0 : 解决 C++17 std::byte 与 torch::byte 的冲突
+          # /DNOMINMAX        : 防止 Windows min/max 宏干扰
+          $Env:CFLAGS = "/Ustd /D_HAS_STD_BYTE=0 /DNOMINMAX"
+          $Env:CXXFLAGS = "/Ustd /D_HAS_STD_BYTE=0 /DNOMINMAX"
+          
+          # NVCC 标志：同样传入 /Ustd
+          $Env:NVCC_FLAGS = "-Xcompiler /Ustd -Xcompiler /D_HAS_STD_BYTE=0 -Xcompiler /DNOMINMAX -Xcudafe --diag_suppress=20014,550,177 --allow-unsupported-compiler"
+
+          $Env:MAX_JOBS = "1"
+          $Env:CUDA_HOME = $Env:CUDA_PATH
+          $Env:DISTUTILS_USE_SDK = "1"
+          $Env:TORCH_CUDA_ARCH_LIST = "8.9"
+
+          # --- 5. 修复 setup.py (修复之前的正则报错) ---
+          # 使用简单的字符串替换，避免 PowerShell 正则解析错误
+          if (Test-Path "setup.py") {
+             Write-Host "Patching setup.py to remove -fPIC..."
+             $txt = Get-Content "setup.py" -Raw
+             # 将单引号和双引号版本的 -fPIC 都替换为空格
+             $txt = $txt.Replace("'-fPIC'", " ").Replace('"-fPIC"', " ")
+             $txt | Set-Content "setup.py" -NoNewline
+          }
+
+          # --- 6. 执行构建 ---
+          Write-Host "Starting build..."
+          python setup.py bdist_wheel
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboDiffusion-v2.9.0-cu130-win
+          path: dist/*.whl
